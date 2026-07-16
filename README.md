@@ -60,3 +60,7 @@ hidpi install                    # скопировать бинарник в /u
 ## Дисклеймер
 
 Приватный недокументированный API. Не совместим с App Store, может ломаться между версиями macOS. Layout структуры режима (`modes_D4`) взят из проекта [RDM](https://github.com/usr-sse2/RDM) (MIT) и проверен на macOS 15.7 / Apple Silicon. `set` меняет активный дисплей немедленно; выбор сохраняется между перезагрузками (`kCGConfigurePermanently`). `sudo` не требуется.
+
+## Лицензия
+
+MIT — см. [LICENSE](LICENSE).
