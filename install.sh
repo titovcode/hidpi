@@ -25,7 +25,12 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 echo "==> Downloading source"
-curl -fsSL "https://github.com/$REPO/archive/refs/heads/$BRANCH.tar.gz" | tar xz -C "$TMP"
+# Download to a file (with retries) before extracting, so a dropped
+# connection mid-stream doesn't corrupt a pipe and can be retried cleanly.
+TARBALL="$TMP/src.tar.gz"
+curl -fsSL --retry 5 --retry-delay 2 --retry-connrefused --retry-all-errors \
+  "https://github.com/$REPO/archive/refs/heads/$BRANCH.tar.gz" -o "$TARBALL"
+tar xz -C "$TMP" -f "$TARBALL"
 SRC="$TMP/$(basename "$REPO")-$BRANCH"
 
 echo "==> Building (release). The first optimized compile can take ~1 minute."
