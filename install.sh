@@ -28,11 +28,39 @@ echo "==> Downloading source"
 curl -fsSL "https://github.com/$REPO/archive/refs/heads/$BRANCH.tar.gz" | tar xz -C "$TMP"
 SRC="$TMP/$(basename "$REPO")-$BRANCH"
 
-echo "==> Building (release), this may take a minute"
-( cd "$SRC" && swift build -c release )
+echo "==> Building (release). The first optimized compile can take ~1 minute."
+LOG="$TMP/build.log"
+( cd "$SRC" && swift build -c release ) >"$LOG" 2>&1 &
+BUILD_PID=$!
+# Spinner + elapsed timer so the silent optimization step doesn't look hung.
+if [ -t 1 ]; then
+  spin='|/-\'
+  i=0
+  start=$(date +%s)
+  while kill -0 "$BUILD_PID" 2>/dev/null; do
+    i=$(( (i + 1) % 4 ))
+    printf "\r    %s compiling... %ss " "${spin:$i:1}" "$(( $(date +%s) - start ))"
+    sleep 0.2
+  done
+  printf "\r\033[K"
+fi
+if ! wait "$BUILD_PID"; then
+  echo "Error: build failed." >&2
+  cat "$LOG" >&2
+  exit 1
+fi
+echo "    Build complete."
 
 echo "==> Installing to $DEST (may ask for your password)"
 sudo install -d -m 755 "$DEST"
 sudo install -m 755 "$SRC/.build/release/$BIN" "$DEST/$BIN"
 
-echo "==> Done. Launch it with:  $BIN"
+echo "==> Done. Installed to $DEST/$BIN"
+# Launch immediately. Under `curl | bash` stdin is the pipe, so read keys from
+# the controlling terminal to keep the interactive picker usable.
+if [ -t 1 ] && [ -e /dev/tty ]; then
+  echo "==> Launching hidpi..."
+  "$DEST/$BIN" </dev/tty || true
+else
+  echo "    Launch it with:  $BIN"
+fi
