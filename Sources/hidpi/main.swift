@@ -58,13 +58,13 @@ func nativePixels(_ modes: [modes_D4]) -> (w: Int, h: Int) {
     return pool.max { $0.w * $0.h < $1.w * $1.h } ?? (0, 0)
 }
 
-// How a HiDPI render maps onto the panel: exact 2x, supersampled (downscaled),
-// or below native (upscaled). nil for non-HiDPI or unknown.
-func sharpness(_ m: modes_D4, native: (w: Int, h: Int)) -> String? {
-    guard m.derived.density >= 2.0, native.w > 0 else { return nil }
-    let p = pixelSize(m)
-    if p.w == native.w && p.h == native.h { return "чётко" }
-    return p.w * p.h > native.w * native.h ? "суперсэмплинг" : "мягко"
+// How a HiDPI render maps onto the panel: exact 2x (sharp), supersampled
+// (rendered above native and downscaled), or soft (below native). Empty for
+// non-HiDPI or when the native size is unknown.
+func sharpnessLabel(pixelW: Int, pixelH: Int, native: (w: Int, h: Int)) -> String {
+    guard native.w > 0 else { return "" }
+    if pixelW == native.w && pixelH == native.h { return "sharp" }
+    return pixelW * pixelH > native.w * native.h ? "supersampled" : "soft"
 }
 
 func describe(_ m: modes_D4) -> String {
@@ -519,13 +519,12 @@ func cmdInteractive() {
             let hidpi = g.isHiDPI ? "  [HiDPI]" : ""
             let render = g.isHiDPI ? "  → \(g.pixelW)x\(g.pixelH)" : ""
             var quality = ""
-            if g.isHiDPI && native.w > 0 {
-                if g.pixelW == native.w && g.pixelH == native.h { quality = "  чётко" }
-                else if g.pixelW * g.pixelH > native.w * native.h { quality = "  суперсэмплинг" }
-                else { quality = "  мягко" }
+            if g.isHiDPI {
+                let s = sharpnessLabel(pixelW: g.pixelW, pixelH: g.pixelH, native: native)
+                if !s.isEmpty { quality = "  \(s)" }
             }
             var tag = ""
-            if g.isHiDPI && g.isNative { tag = "  ★ чёткий 2x" }
+            if g.isHiDPI && g.isNative { tag = "  ★ sharp 2x" }
             if isCurrent { tag += "  ← current" }
             let hz = g.freqs.count > 1
                 ? "up to \(g.freqs.first!.freq)Hz (\(g.freqs.count) rates)"
