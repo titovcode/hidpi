@@ -122,6 +122,10 @@ func usage() {
       hidpi set  -d N -w W -h H [-s S] [-b BITS]
       hidpi set  -d N --mode IDX       Switch to mode by index
       hidpi reset [-d N]               Restore the macOS default mode
+      hidpi override list [-d N]       Show the display's EDID override
+      hidpi override add -d N -w W -h H [--no-hidpi] [--retina] [--dry-run]
+                                       Inject a scaled resolution (sudo, reboot)
+      hidpi override clear [-d N]      Remove the override we wrote (sudo)
       hidpi install                    Copy binary to /usr/local/bin (needs sudo)
 
     OPTIONS:
@@ -616,6 +620,8 @@ case "set":
     cmdSet()
 case "reset":
     cmdReset()
+case "override":
+    cmdOverride()
 case "pick", .none:
     cmdInteractive()
 case "install":
