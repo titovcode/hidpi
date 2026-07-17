@@ -121,6 +121,7 @@ func usage() {
       hidpi modes [-d N] [--hidpi]     List modes for display N (default 0)
       hidpi set  -d N -w W -h H [-s S] [-b BITS]
       hidpi set  -d N --mode IDX       Switch to mode by index
+      hidpi reset [-d N]               Restore the macOS default mode
       hidpi install                    Copy binary to /usr/local/bin (needs sudo)
 
     OPTIONS:
@@ -213,6 +214,27 @@ func cmdSet() {
     var m = modes_D4()
     hidpi_get_mode(display, Int32(target), &m)
     print("Set mode [\(target)]: \(describe(m))")
+}
+
+func cmdReset() {
+    guard let display = resolveDisplay() else { exit(1) }
+    let modes = allModes(display)
+    guard !modes.isEmpty else {
+        FileHandle.standardError.write("Error: no modes for this display\n".data(using: .utf8)!)
+        exit(1)
+    }
+    guard let target = modes.firstIndex(where: isDefaultMode) else {
+        FileHandle.standardError.write("Error: no default mode reported for this display\n".data(using: .utf8)!)
+        exit(1)
+    }
+    let err = hidpi_set_mode(display, Int32(target))
+    if err != 0 {
+        FileHandle.standardError.write("Error: CGCompleteDisplayConfiguration returned \(err)\n".data(using: .utf8)!)
+        exit(1)
+    }
+    var m = modes_D4()
+    hidpi_get_mode(display, Int32(target), &m)
+    print("Reset to default mode [\(target)]: \(describe(m))")
 }
 
 // MARK: - Interactive picker
@@ -592,6 +614,8 @@ case "modes":
     cmdModes()
 case "set":
     cmdSet()
+case "reset":
+    cmdReset()
 case "pick", .none:
     cmdInteractive()
 case "install":
