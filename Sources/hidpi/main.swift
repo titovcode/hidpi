@@ -36,11 +36,44 @@ func allModes(_ display: CGDirectDisplayID) -> [modes_D4] {
 
 func bitsPerPixel(_ m: modes_D4) -> Int { m.derived.depth == 4 ? 32 : 16 }
 
+// Backing pixels actually rendered by the GPU (2W x 2H for a scale-2 HiDPI
+// mode). For a 1x mode this equals the logical size.
+func pixelSize(_ m: modes_D4) -> (w: Int, h: Int) {
+    (Int(m.derived.pixelWidth), Int(m.derived.pixelHeight))
+}
+
+// IOKit display-mode flags (bits in modes_D4.flags at offset 0x4).
+let kDisplayModeDefaultFlag: UInt32 = 0x4
+let kDisplayModeNativeFlag: UInt32 = 0x0200_0000
+
+func isDefaultMode(_ m: modes_D4) -> Bool { (m.derived.flags & kDisplayModeDefaultFlag) != 0 }
+func isNativeMode(_ m: modes_D4) -> Bool { (m.derived.flags & kDisplayModeNativeFlag) != 0 }
+
+// The panel's true pixel resolution: the backing size macOS marks as default,
+// else the largest native-flagged backing, else the largest backing overall.
+func nativePixels(_ modes: [modes_D4]) -> (w: Int, h: Int) {
+    if let d = modes.first(where: isDefaultMode) { return pixelSize(d) }
+    let native = modes.filter(isNativeMode).map(pixelSize)
+    let pool = native.isEmpty ? modes.map(pixelSize) : native
+    return pool.max { $0.w * $0.h < $1.w * $1.h } ?? (0, 0)
+}
+
+// How a HiDPI render maps onto the panel: exact 2x, supersampled (downscaled),
+// or below native (upscaled). nil for non-HiDPI or unknown.
+func sharpness(_ m: modes_D4, native: (w: Int, h: Int)) -> String? {
+    guard m.derived.density >= 2.0, native.w > 0 else { return nil }
+    let p = pixelSize(m)
+    if p.w == native.w && p.h == native.h { return "чётко" }
+    return p.w * p.h > native.w * native.h ? "суперсэмплинг" : "мягко"
+}
+
 func describe(_ m: modes_D4) -> String {
     let hidpi = m.derived.density >= 2.0 ? "  [HiDPI]" : ""
+    let p = pixelSize(m)
+    let render = m.derived.density >= 2.0 ? "  → \(p.w)x\(p.h)" : ""
     return String(
-        format: "%dx%d  scale=%.1f  %dHz  %dbpp%@",
-        m.derived.width, m.derived.height, m.derived.density,
+        format: "%dx%d  scale=%.1f%@  %dHz  %dbpp%@",
+        m.derived.width, m.derived.height, m.derived.density, render,
         m.derived.freq, bitsPerPixel(m), hidpi)
 }
 
@@ -190,6 +223,9 @@ struct ResGroup {
     let height: Int
     let density: Double
     let bpp: Int
+    let pixelW: Int
+    let pixelH: Int
+    var isNative: Bool
     var freqs: [(freq: Int, index: Int)]  // highest first
 
     var area: Int { width * height }
@@ -204,9 +240,12 @@ func groupModes(_ modes: [modes_D4]) -> [ResGroup] {
         let w = Int(m.derived.width), h = Int(m.derived.height)
         let d = Double(m.derived.density)
         let key = "\(w)x\(h)@\(d)"
+        let p = pixelSize(m)
         if byKey[key] == nil {
-            byKey[key] = ResGroup(width: w, height: h, density: d, bpp: bitsPerPixel(m), freqs: [])
+            byKey[key] = ResGroup(width: w, height: h, density: d, bpp: bitsPerPixel(m),
+                                  pixelW: p.w, pixelH: p.h, isNative: false, freqs: [])
         }
+        if isNativeMode(m) { byKey[key]!.isNative = true }
         byKey[key]!.freqs.append((Int(m.derived.freq), i))
     }
     for key in byKey.keys {
@@ -462,10 +501,11 @@ func cmdInteractive() {
         return
     }
 
-    // Label the largest HiDPI group as the max-workspace recommendation.
-    let maxHiDPIArea = groups.filter { $0.isHiDPI }.map { $0.area }.max()
     let hint = showAll ? "" : "  (--all for every mode)"
     let dispLabel = displayName(display).map { "\u{1B}[32m\($0)\u{1B}[0m, " } ?? ""
+    // Panel's true pixel resolution, used to classify each HiDPI render as
+    // exact 2x, supersampled (downscaled), or below native.
+    let native = nativePixels(all)
 
     // Loop: after applying a mode, return to the list so several can be tried.
     // Esc/q exits. Labels are rebuilt each pass so ← current stays accurate.
@@ -477,14 +517,21 @@ func cmdInteractive() {
             let isCurrent = g.freqs.contains { $0.index == cur }
             if isCurrent { curPick = n }
             let hidpi = g.isHiDPI ? "  [HiDPI]" : ""
+            let render = g.isHiDPI ? "  → \(g.pixelW)x\(g.pixelH)" : ""
+            var quality = ""
+            if g.isHiDPI && native.w > 0 {
+                if g.pixelW == native.w && g.pixelH == native.h { quality = "  чётко" }
+                else if g.pixelW * g.pixelH > native.w * native.h { quality = "  суперсэмплинг" }
+                else { quality = "  мягко" }
+            }
             var tag = ""
-            if g.isHiDPI && g.area == maxHiDPIArea { tag = "  ★ макс. места" }
+            if g.isHiDPI && g.isNative { tag = "  ★ чёткий 2x" }
             if isCurrent { tag += "  ← current" }
             let hz = g.freqs.count > 1
                 ? "up to \(g.freqs.first!.freq)Hz (\(g.freqs.count) rates)"
                 : "\(g.freqs.first!.freq)Hz"
-            return String(format: "%dx%d  scale=%.1f  %@  %dbpp%@%@",
-                          g.width, g.height, g.density, hz, g.bpp, hidpi, tag)
+            return String(format: "%dx%d  scale=%.1f%@  %@  %dbpp%@%@%@",
+                          g.width, g.height, g.density, render, hz, g.bpp, hidpi, quality, tag)
         }
 
         var title = "Resolution for \(dispLabel)display \(displayIdx):\(hint)"

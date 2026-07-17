@@ -19,7 +19,9 @@ typedef union {
         uint32_t dc2[42];
         uint16_t dc3;        // 0xBC
         uint16_t freq;       // 0xBE
-        uint32_t dc4[4];
+        uint32_t dc4[2];
+        uint32_t pixelWidth; // 0xC8 (backing/render pixels)
+        uint32_t pixelHeight;// 0xCC
         float density;       // 0xD0 (2.0 == HiDPI)
     } derived;
 } modes_D4;
