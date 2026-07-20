@@ -22,7 +22,6 @@ if ! command -v swift >/dev/null 2>&1; then
 fi
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
 
 echo "==> Downloading source"
 # Download to a file (with retries) before extracting, so a dropped
@@ -37,6 +36,13 @@ echo "==> Building (release). The first optimized compile can take ~1 minute."
 LOG="$TMP/build.log"
 ( cd "$SRC" && swift build -c release ) >"$LOG" 2>&1 &
 BUILD_PID=$!
+# Kill the background build on script exit (Ctrl-C, SIGTERM, etc.).
+cleanup() {
+  kill "$BUILD_PID" 2>/dev/null || true
+  wait "$BUILD_PID" 2>/dev/null || true
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
 # Spinner + elapsed timer so the silent optimization step doesn't look hung.
 if [ -t 1 ]; then
   spin='|/-\'

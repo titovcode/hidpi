@@ -3,6 +3,12 @@ import CDisplayPrivate
 import CoreGraphics
 import Foundation
 
+// MARK: - Helpers
+
+func errWrite(_ msg: String) {
+    FileHandle.standardError.write(Data((msg).utf8))
+}
+
 // MARK: - Display enumeration
 
 func onlineDisplays() -> [CGDirectDisplayID] {
@@ -34,7 +40,14 @@ func allModes(_ display: CGDirectDisplayID) -> [modes_D4] {
     return modes
 }
 
-func bitsPerPixel(_ m: modes_D4) -> Int { m.derived.depth == 4 ? 32 : 16 }
+func bitsPerPixel(_ m: modes_D4) -> Int {
+    switch m.derived.depth {
+    case 1: return 8
+    case 2: return 16
+    case 4: return 32
+    default: return 32
+    }
+}
 
 // Backing pixels actually rendered by the GPU (2W x 2H for a scale-2 HiDPI
 // mode). For a 1x mode this equals the logical size.
@@ -84,7 +97,10 @@ let args = Array(CommandLine.arguments.dropFirst())
 func optionValue(_ names: [String]) -> String? {
     for name in names {
         if let i = args.firstIndex(of: name), i + 1 < args.count {
-            return args[i + 1]
+            let next = args[i + 1]
+            // Don't consume another flag as the value.
+            if next.hasPrefix("-") { continue }
+            return next
         }
     }
     return nil
@@ -98,13 +114,12 @@ func doubleOption(_ names: [String]) -> Double? { optionValue(names).flatMap { D
 func resolveDisplay() -> CGDirectDisplayID? {
     let displays = onlineDisplays()
     guard !displays.isEmpty else {
-        FileHandle.standardError.write("Error: no online displays\n".data(using: .utf8)!)
+        errWrite("Error: no online displays\n")
         return nil
     }
     let idx = intOption(["-d", "--display"]) ?? 0
     guard idx >= 0, idx < displays.count else {
-        FileHandle.standardError.write(
-            "Error: display index \(idx) out of range (0..\(displays.count - 1))\n".data(using: .utf8)!)
+            errWrite("Error: display index \(idx) out of range (0..\(displays.count - 1))\n")
         return nil
     }
     return displays[idx]
@@ -170,7 +185,7 @@ func cmdSet() {
     guard let display = resolveDisplay() else { exit(1) }
     let modes = allModes(display)
     guard !modes.isEmpty else {
-        FileHandle.standardError.write("Error: no modes for this display\n".data(using: .utf8)!)
+        errWrite("Error: no modes for this display\n")
         exit(1)
     }
 
@@ -178,7 +193,7 @@ func cmdSet() {
 
     if let idx = intOption(["--mode"]) {
         guard idx >= 0, idx < modes.count else {
-            FileHandle.standardError.write("Error: mode index out of range\n".data(using: .utf8)!)
+            errWrite("Error: mode index out of range\n")
             exit(1)
         }
         target = idx
@@ -203,16 +218,15 @@ func cmdSet() {
         }
 
         if target == -1 {
-            FileHandle.standardError.write(
-                "Error: no matching mode \(width)x\(height) scale=\(scale). Run 'hidpi modes -d ... --hidpi' to see what's available.\n"
-                    .data(using: .utf8)!)
+            errWrite(
+                "Error: no matching mode \(width)x\(height) scale=\(scale). Run 'hidpi modes -d ... --hidpi' to see what's available.\n")
             exit(1)
         }
     }
 
     let err = hidpi_set_mode(display, Int32(target))
     if err != 0 {
-        FileHandle.standardError.write("Error: CGCompleteDisplayConfiguration returned \(err)\n".data(using: .utf8)!)
+        errWrite("Error: CGCompleteDisplayConfiguration returned \(err)\n")
         exit(1)
     }
     var m = modes_D4()
@@ -224,16 +238,16 @@ func cmdReset() {
     guard let display = resolveDisplay() else { exit(1) }
     let modes = allModes(display)
     guard !modes.isEmpty else {
-        FileHandle.standardError.write("Error: no modes for this display\n".data(using: .utf8)!)
+        errWrite("Error: no modes for this display\n")
         exit(1)
     }
     guard let target = modes.firstIndex(where: isDefaultMode) else {
-        FileHandle.standardError.write("Error: no default mode reported for this display\n".data(using: .utf8)!)
+        errWrite("Error: no default mode reported for this display\n")
         exit(1)
     }
     let err = hidpi_set_mode(display, Int32(target))
     if err != 0 {
-        FileHandle.standardError.write("Error: CGCompleteDisplayConfiguration returned \(err)\n".data(using: .utf8)!)
+        errWrite("Error: CGCompleteDisplayConfiguration returned \(err)\n")
         exit(1)
     }
     var m = modes_D4()
@@ -265,7 +279,9 @@ func groupModes(_ modes: [modes_D4]) -> [ResGroup] {
     for (i, m) in modes.enumerated() {
         let w = Int(m.derived.width), h = Int(m.derived.height)
         let d = Double(m.derived.density)
-        let key = "\(w)x\(h)@\(d)"
+        // Round to 2 decimal places to avoid phantom groups from float noise.
+        let dKey = String(format: "%.2f", d)
+        let key = "\(w)x\(h)@\(dKey)"
         let p = pixelSize(m)
         if byKey[key] == nil {
             byKey[key] = ResGroup(width: w, height: h, density: d, bpp: bitsPerPixel(m),
@@ -287,6 +303,27 @@ func groupModes(_ modes: [modes_D4]) -> [ResGroup] {
 }
 
 // MARK: - Arrow-key menu
+
+// Global terminal state for signal-safe restore (SIGTERM/SIGINT).
+private var savedTermios: termios?
+private var altScreenActive = false
+
+private func emergencyRestoreTerminal() {
+    if altScreenActive {
+        FileHandle.standardError.write("\u{1B}[?25h\u{1B}[?1049l".data(using: .utf8) ?? Data())
+        fflush(stderr)
+    }
+    if var orig = savedTermios {
+        tcsetattr(STDIN_FILENO, TCSANOW, &orig)
+    }
+}
+
+private func handleSignal(_ sig: Int32) {
+    emergencyRestoreTerminal()
+    // Re-raise with default handler so the process exits with the correct status.
+    signal(sig, SIG_DFL)
+    raise(sig)
+}
 
 // Terminal size (falls back to 80x24 if it can't be queried).
 func termSize() -> (cols: Int, rows: Int) {
@@ -338,6 +375,7 @@ func arrowMenu(title: String, items: [String], initial: Int = 0) -> Int? {
 
     var orig = termios()
     tcgetattr(STDIN_FILENO, &orig)
+    savedTermios = orig
     var raw = orig
     // Clear ISIG too, so Ctrl-C arrives as a byte (0x03) we can handle and
     // restore the terminal, instead of SIGINT killing us mid-alt-screen.
@@ -347,12 +385,23 @@ func arrowMenu(title: String, items: [String], initial: Int = 0) -> Int? {
     // This isolates the menu from the scrollback, so redraws can't drift or
     // duplicate the header, and the terminal is left clean on exit.
     print("\u{1B}[?1049h\u{1B}[?25l", terminator: "")
+    altScreenActive = true
+
+    // Restore terminal on SIGTERM/SIGINT so a kill or shutdown doesn't leave
+    // the user in alt-screen with a hidden cursor.
+    let prevTerm = signal(SIGTERM, handleSignal)
+    let prevInt = signal(SIGINT, handleSignal)
 
     func restore() {
         // Leave alt screen, show cursor, restore terminal mode.
         print("\u{1B}[?25h\u{1B}[?1049l", terminator: "")
         fflush(stdout)
         tcsetattr(STDIN_FILENO, TCSANOW, &orig)
+        // Restore previous signal handlers.
+        signal(SIGTERM, prevTerm)
+        signal(SIGINT, prevInt)
+        altScreenActive = false
+        savedTermios = nil
     }
 
     // True if a byte is available on stdin within timeoutMs. Lets us tell a
@@ -423,18 +472,18 @@ func arrowMenu(title: String, items: [String], initial: Int = 0) -> Int? {
             return "\(b)║\(r) \(g)\(text)\(g)\(pad) \(b)║\(r)"
         }
 
-        print(bar("╔", "═", "╗") + "\r")
-        print(row(header, color: b) + "\r")
-        print(row(subheader, color: d) + "\r")
-        print(bar("╠", "═", "╣") + "\r")
-        for t in titleLines { print(rowANSI(t) + "\r") }
-        print(bar("╟", "─", "╢", label: off > 0 ? "▲ \(off) more" : "") + "\r")
+        print(bar("╔", "═", "╗"))
+        print(row(header, color: b))
+        print(row(subheader, color: d))
+        print(bar("╠", "═", "╣"))
+        for t in titleLines { print(rowANSI(t)) }
+        print(bar("╟", "─", "╢", label: off > 0 ? "▲ \(off) more" : ""))
         for i in off..<end {
-            print(row((i == sel ? "▶ " : "  ") + items[i], selected: i == sel) + "\r")
+            print(row((i == sel ? "▶ " : "  ") + items[i], selected: i == sel))
         }
         let belowCount = items.count - end
-        print(bar("╠", "═", "╣", label: belowCount > 0 ? "▼ \(belowCount) more" : "") + "\r")
-        print(row(footer, color: d) + "\r")
+        print(bar("╠", "═", "╣", label: belowCount > 0 ? "▼ \(belowCount) more" : ""))
+        print(row(footer, color: d))
         print(bar("╚", "═", "╝"), terminator: "")
         fflush(stdout)
     }
@@ -454,7 +503,8 @@ func arrowMenu(title: String, items: [String], initial: Int = 0) -> Int? {
             let n2 = read(STDIN_FILENO, &buf, 1)
             if n2 <= 0 { restore(); print(); return nil }
             if buf[0] == UInt8(ascii: "[") {
-                _ = read(STDIN_FILENO, &buf, 1)
+                let n3 = read(STDIN_FILENO, &buf, 1)
+                if n3 <= 0 { restore(); print(); return nil }
                 if buf[0] == UInt8(ascii: "A") { sel = (sel - 1 + items.count) % items.count }
                 if buf[0] == UInt8(ascii: "B") { sel = (sel + 1) % items.count }
                 render()
@@ -629,7 +679,7 @@ case "install":
 case "help", "-h", "--help":
     usage()
 default:
-    FileHandle.standardError.write("Unknown command: \(args.first!)\n".data(using: .utf8)!)
+    errWrite("Unknown command: \(args.first!)\n")
     usage()
     exit(1)
 }

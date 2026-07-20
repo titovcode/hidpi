@@ -55,7 +55,7 @@ func encodeScaleResolution(width: Int, height: Int, hidpi: Bool, retina: Bool) -
 }
 
 // Inverse of encode: report the logical size and whether it is HiDPI.
-func decodeScaleResolution(_ data: Data) -> (w: Int, h: Int, hidpi: Bool)? {
+func decodeScaleResolution(_ data: Data) -> (w: Int, h: Int, hidpi: Bool, retina: Bool)? {
     let bytes = [UInt8](data)
     guard bytes.count >= 8 else { return nil }
     func u32(_ o: Int) -> UInt32 {
@@ -67,7 +67,8 @@ func decodeScaleResolution(_ data: Data) -> (w: Int, h: Int, hidpi: Bool)? {
     if bytes.count >= 12 { flags |= UInt64(u32(8)) << 32 }
     if bytes.count >= 16 { flags |= UInt64(u32(12)) }
     let hidpi = flags & kFlagHiDPI != 0
-    return (hidpi ? pw / 2 : pw, hidpi ? ph / 2 : ph, hidpi)
+    let retina = flags & kFlagRetina != 0
+    return (hidpi ? pw / 2 : pw, hidpi ? ph / 2 : ph, hidpi, retina)
 }
 
 private func loadOverride(_ path: String) -> [String: Any] {
@@ -93,8 +94,7 @@ func cmdOverride() {
     case "clear":
         overrideClear()
     default:
-        FileHandle.standardError.write(
-            "Unknown override subcommand. Use: list | add | clear\n".data(using: .utf8)!)
+        errWrite("Unknown override subcommand. Use: list | add | clear\n")
         exit(1)
     }
 }
@@ -115,7 +115,9 @@ private func overrideList() {
     print("scale-resolutions (\(entries.count)):")
     for d in entries {
         if let r = decodeScaleResolution(d) {
-            print(String(format: "  %dx%d%@", r.w, r.h, r.hidpi ? "  [HiDPI]" : ""))
+            var tags = r.hidpi ? "  [HiDPI]" : ""
+            if r.retina { tags += "  [Retina]" }
+            print(String(format: "  %dx%d%@", r.w, r.h, tags))
         }
     }
 }
@@ -123,8 +125,11 @@ private func overrideList() {
 private func overrideAdd() {
     guard let display = resolveDisplay() else { exit(1) }
     guard let w = intOption(["-w", "--width"]), let h = intOption(["-h", "--height"]) else {
-        FileHandle.standardError.write(
-            "Error: -w and -h are required (logical resolution to add)\n".data(using: .utf8)!)
+        errWrite("Error: -w and -h are required (logical resolution to add)\n")
+        exit(1)
+    }
+    guard w > 0, h > 0, w <= 15360, h <= 8640 else {
+        errWrite("Error: width and height must be between 1 and 15360 (got \(w)x\(h))\n")
         exit(1)
     }
     let hidpi = !hasFlag(["--no-hidpi"])
@@ -153,7 +158,7 @@ private func overrideAdd() {
 
     guard let out = try? PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0)
     else {
-        FileHandle.standardError.write("Error: could not serialize plist\n".data(using: .utf8)!)
+        errWrite("Error: could not serialize plist\n")
         exit(1)
     }
 
@@ -164,9 +169,8 @@ private func overrideAdd() {
     }
 
     guard geteuid() == 0 else {
-        FileHandle.standardError.write(
-            "Error: writing \(ov.path) needs root.\n  Re-run: sudo hidpi override add -d \(intOption(["-d", "--display"]) ?? 0) -w \(w) -h \(h)\(hidpi ? "" : " --no-hidpi")\(retina ? " --retina" : "")\n"
-                .data(using: .utf8)!)
+        errWrite(
+            "Error: writing \(ov.path) needs root.\n  Re-run: sudo hidpi override add -d \(intOption(["-d", "--display"]) ?? 0) -w \(w) -h \(h)\(hidpi ? "" : " --no-hidpi")\(retina ? " --retina" : "")\n")
         exit(1)
     }
 
@@ -174,16 +178,21 @@ private func overrideAdd() {
         if FileManager.default.fileExists(atPath: ov.path) {
             let bak = ov.path + ".hidpi-backup"
             if !FileManager.default.fileExists(atPath: bak) {
-                try? FileManager.default.copyItem(atPath: ov.path, toPath: bak)
+                do {
+                    try FileManager.default.copyItem(atPath: ov.path, toPath: bak)
+                } catch {
+                    errWrite("Warning: could not create backup \(bak): \(error.localizedDescription)\n")
+                    // Continue anyway — the user explicitly asked for this.
+                }
             }
         }
         try FileManager.default.createDirectory(
             atPath: ov.dir, withIntermediateDirectories: true)
-        try out.write(to: URL(fileURLWithPath: ov.path))
+        try out.write(to: URL(fileURLWithPath: ov.path), options: .atomic)
         print("Written. Reboot to apply, then run 'hidpi modes -d 0 --hidpi'.")
         print("Revert with: sudo hidpi override clear -d \(intOption(["-d", "--display"]) ?? 0)")
     } catch {
-        FileHandle.standardError.write("Error: \(error.localizedDescription)\n".data(using: .utf8)!)
+        errWrite("Error: \(error.localizedDescription)\n")
         exit(1)
     }
 }
@@ -197,9 +206,8 @@ private func overrideClear() {
         return
     }
     guard geteuid() == 0 else {
-        FileHandle.standardError.write(
-            "Error: removing \(ov.path) needs root.\n  Re-run: sudo hidpi override clear -d \(intOption(["-d", "--display"]) ?? 0)\n"
-                .data(using: .utf8)!)
+        errWrite(
+            "Error: removing \(ov.path) needs root.\n  Re-run: sudo hidpi override clear -d \(intOption(["-d", "--display"]) ?? 0)\n")
         exit(1)
     }
     do {
@@ -214,7 +222,7 @@ private func overrideClear() {
         }
         print("Reboot to apply.")
     } catch {
-        FileHandle.standardError.write("Error: \(error.localizedDescription)\n".data(using: .utf8)!)
+        errWrite("Error: \(error.localizedDescription)\n")
         exit(1)
     }
 }

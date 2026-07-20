@@ -28,10 +28,10 @@ typedef union {
 
 // Private SkyLight/CoreGraphics symbols. Declared here; resolved at link
 // time against CoreGraphics.framework.
-extern void CGSGetCurrentDisplayMode(CGDirectDisplayID display, int *modeNum);
-extern void CGSConfigureDisplayMode(CGDisplayConfigRef config, CGDirectDisplayID display, int modeNum);
-extern void CGSGetNumberOfDisplayModes(CGDirectDisplayID display, int *nModes);
-extern void CGSGetDisplayModeDescriptionOfLength(CGDirectDisplayID display, int idx, modes_D4 *mode, int length);
+extern int CGSGetCurrentDisplayMode(CGDirectDisplayID display, int *modeNum);
+extern int CGSConfigureDisplayMode(CGDisplayConfigRef config, CGDirectDisplayID display, int modeNum);
+extern int CGSGetNumberOfDisplayModes(CGDirectDisplayID display, int *nModes);
+extern int CGSGetDisplayModeDescriptionOfLength(CGDirectDisplayID display, int idx, modes_D4 *mode, int length);
 
 // Thin wrappers exposed to Swift.
 int  hidpi_number_of_modes(CGDirectDisplayID display);

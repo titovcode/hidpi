@@ -28,6 +28,10 @@ int hidpi_set_mode(CGDirectDisplayID display, int modeNum) {
     if (err != kCGErrorSuccess) {
         return (int)err;
     }
-    CGSConfigureDisplayMode(config, display, modeNum);
+    err = CGSConfigureDisplayMode(config, display, modeNum);
+    if (err != kCGErrorSuccess) {
+        CGCancelDisplayConfiguration(config);
+        return (int)err;
+    }
     return (int)CGCompleteDisplayConfiguration(config, kCGConfigurePermanently);
 }
