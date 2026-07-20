@@ -370,7 +370,7 @@ func visibleLength(_ s: String) -> Int {
 enum Pip {
     static let green = "\u{1B}[38;5;40m"
     static let bright = "\u{1B}[1;38;5;46m"
-    static let dim = "\u{1B}[38;5;28m"
+    static let dim = "\u{1B}[38;5;34m"
     static let inverse = "\u{1B}[7m"
     static let reset = "\u{1B}[0m"
 }
