@@ -331,6 +331,16 @@ private func handleSignal(_ sig: Int32) {
     raise(sig)
 }
 
+// Install a signal handler without SA_RESTART so that blocking read() calls
+// are interrupted (return -1/EINTR) when the signal is delivered.
+private func installSignalHandler(_ sig: Int32) {
+    var sa = sigaction()
+    sa.__sigaction_u.__sa_handler = handleSignal
+    sigemptyset(&sa.sa_mask)
+    sa.sa_flags = 0  // No SA_RESTART — interrupt read().
+    sigaction(sig, &sa, nil)
+}
+
 // Terminal size (falls back to 80x24 if it can't be queried).
 func termSize() -> (cols: Int, rows: Int) {
     var w = winsize()
@@ -395,9 +405,16 @@ func arrowMenu(title: String, items: [String], initial: Int = 0) -> Int? {
 
     // Restore terminal on SIGTERM/SIGINT so a kill or shutdown doesn't leave
     // the user in alt-screen with a hidden cursor.
-    let prevTerm = signal(SIGTERM, handleSignal)
-    let prevInt = signal(SIGINT, handleSignal)
-    let prevWinch = signal(SIGWINCH, handleSignal)
+    // Use sigaction() without SA_RESTART so blocking read() is interrupted.
+    var prevTermAction = sigaction()
+    sigaction(SIGTERM, nil, &prevTermAction)
+    var prevIntAction = sigaction()
+    sigaction(SIGINT, nil, &prevIntAction)
+    var prevWinchAction = sigaction()
+    sigaction(SIGWINCH, nil, &prevWinchAction)
+    installSignalHandler(SIGTERM)
+    installSignalHandler(SIGINT)
+    installSignalHandler(SIGWINCH)
 
     func restore() {
         // Leave alt screen, show cursor, restore terminal mode.
@@ -405,9 +422,9 @@ func arrowMenu(title: String, items: [String], initial: Int = 0) -> Int? {
         fflush(stdout)
         tcsetattr(STDIN_FILENO, TCSANOW, &orig)
         // Restore previous signal handlers.
-        signal(SIGTERM, prevTerm)
-        signal(SIGINT, prevInt)
-        signal(SIGWINCH, prevWinch)
+        sigaction(SIGTERM, &prevTermAction, nil)
+        sigaction(SIGINT, &prevIntAction, nil)
+        sigaction(SIGWINCH, &prevWinchAction, nil)
         altScreenActive = false
         savedTermios = nil
     }
