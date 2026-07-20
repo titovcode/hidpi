@@ -307,6 +307,8 @@ func groupModes(_ modes: [modes_D4]) -> [ResGroup] {
 // Global terminal state for signal-safe restore (SIGTERM/SIGINT).
 private var savedTermios: termios?
 private var altScreenActive = false
+// Set by SIGWINCH handler so the main loop knows to re-render.
+private var resizePending = false
 
 private func emergencyRestoreTerminal() {
     if altScreenActive {
@@ -319,6 +321,10 @@ private func emergencyRestoreTerminal() {
 }
 
 private func handleSignal(_ sig: Int32) {
+    if sig == SIGWINCH {
+        resizePending = true
+        return
+    }
     emergencyRestoreTerminal()
     // Re-raise with default handler so the process exits with the correct status.
     signal(sig, SIG_DFL)
@@ -391,6 +397,7 @@ func arrowMenu(title: String, items: [String], initial: Int = 0) -> Int? {
     // the user in alt-screen with a hidden cursor.
     let prevTerm = signal(SIGTERM, handleSignal)
     let prevInt = signal(SIGINT, handleSignal)
+    let prevWinch = signal(SIGWINCH, handleSignal)
 
     func restore() {
         // Leave alt screen, show cursor, restore terminal mode.
@@ -400,6 +407,7 @@ func arrowMenu(title: String, items: [String], initial: Int = 0) -> Int? {
         // Restore previous signal handlers.
         signal(SIGTERM, prevTerm)
         signal(SIGINT, prevInt)
+        signal(SIGWINCH, prevWinch)
         altScreenActive = false
         savedTermios = nil
     }
@@ -492,7 +500,12 @@ func arrowMenu(title: String, items: [String], initial: Int = 0) -> Int? {
     var buf = [UInt8](repeating: 0, count: 3)
     while true {
         let n = read(STDIN_FILENO, &buf, 1)
-        if n <= 0 { restore(); print(); return nil }
+        if n <= 0 {
+            // EINTR means a signal was delivered (e.g. SIGWINCH).
+            if resizePending { resizePending = false; render(); continue }
+            restore(); print(); return nil
+        }
+        if resizePending { resizePending = false; render(); continue }
         let c = buf[0]
         switch c {
         case 0x1B:  // ESC — bare Esc, or the start of an arrow-key sequence
